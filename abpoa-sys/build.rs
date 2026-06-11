@@ -227,8 +227,8 @@ fn build_dispatch_variants(
     }
     dispatch.compile("abpoa_dispatch");
 
-    // Helper to compile a single SIMD variant of abpoa_align_simd.c with the given flags.
-    let compile_variant = |name: &str, extra_flags: &[&str]| {
+    // Returns a pre-configured Build for an abpoa_align_simd.c dispatch variant.
+    let make_variant_build = || {
         let mut b = cc::Build::new();
         b.warnings(false)
             .include(include_dir)
@@ -245,21 +245,99 @@ fn build_dispatch_variants(
         if is_linux {
             b.define("_GNU_SOURCE", None);
         }
-        for f in extra_flags {
-            b.flag_if_supported(f);
-        }
-        b.file(src_dir.join("abpoa_align_simd.c"));
-        b.compile(name);
+        b
     };
 
-    // SSE2 variant (clear __SSE4_1__ to force SSE2, mirrors upstream Makefile)
-    compile_variant("abpoa_align_simd_sse2", &["-msse2", "-U__SSE4_1__"]);
-    // SSE4.1 variant
-    compile_variant("abpoa_align_simd_sse41", &["-msse4.1"]);
-    // AVX2 variant
-    compile_variant("abpoa_align_simd_avx2", &["-mavx2"]);
-    // AVX512BW variant
-    compile_variant("abpoa_align_simd_avx512bw", &["-mavx512bw"]);
+    // Test whether the compiler accepts a given ISA flag.
+    let isa_ok = |flag: &str| -> bool {
+        cc::Build::new().is_flag_supported(flag).unwrap_or(false)
+    };
+
+    // Compile abpoa_align_simd.c with required ISA flags.
+    // ISA flags must use .flag() (not .flag_if_supported()): a silently-dropped
+    // flag means the wrong #ifdef branch fires and the wrong symbol name gets
+    // emitted, causing an undefined-reference linker error in the dispatcher.
+    let compile_variant = |lib_name: &str, isa_flags: &[&str]| {
+        let mut b = make_variant_build();
+        for f in isa_flags {
+            b.flag(f);
+        }
+        b.file(src_dir.join("abpoa_align_simd.c"));
+        b.compile(lib_name);
+    };
+
+    // Emit a stub that forwards `from_sym` → `to_sym` when the compiler on this
+    // machine doesn't support the ISA flag needed to compile the real variant.
+    // Safe because at runtime the dispatcher's CPUID check only selects ISA
+    // levels the hardware supports — any machine old enough to lack compiler
+    // support for an ISA also lacks the hardware to execute it.
+    let compile_stub =
+        |lib_name: &str, from_sym: &str, to_sym: &str| {
+            let stub_path = PathBuf::from(env::var("OUT_DIR").unwrap())
+                .join(format!("{lib_name}_stub.c"));
+            std::fs::write(
+                &stub_path,
+                format!(
+                    "#include \"abpoa.h\"\n\
+                     extern int {to_sym}(\
+                       abpoa_t*, abpoa_para_t*, int, int, \
+                       unsigned char*, int, abpoa_res_t*);\n\
+                     int {from_sym}(\
+                       abpoa_t *ab, abpoa_para_t *abpt, \
+                       int beg, int end, \
+                       unsigned char *q, int qlen, abpoa_res_t *res) {{\n\
+                       return {to_sym}(ab, abpt, beg, end, q, qlen, res);\n\
+                     }}\n"
+                ),
+            )
+            .expect("failed to write SIMD stub");
+            cc::Build::new()
+                .warnings(false)
+                .include(include_dir)
+                .include(src_dir)
+                .file(&stub_path)
+                .compile(lib_name);
+        };
+
+    // SSE2 — baseline for x86_64; fail loudly rather than produce a broken binary.
+    if isa_ok("-msse2") {
+        compile_variant("abpoa_align_simd_sse2", &["-msse2", "-U__SSE4_1__"]);
+    } else {
+        panic!("compiler does not support -msse2, which is required for x86/x86_64");
+    }
+
+    // SSE4.1 → SSE2 fallback
+    if isa_ok("-msse4.1") {
+        compile_variant("abpoa_align_simd_sse41", &["-msse4.1"]);
+    } else {
+        compile_stub(
+            "abpoa_align_simd_sse41",
+            "simd_sse41_abpoa_align_sequence_to_subgraph",
+            "simd_sse2_abpoa_align_sequence_to_subgraph",
+        );
+    }
+
+    // AVX2 → SSE4.1 fallback
+    if isa_ok("-mavx2") {
+        compile_variant("abpoa_align_simd_avx2", &["-mavx2"]);
+    } else {
+        compile_stub(
+            "abpoa_align_simd_avx2",
+            "simd_avx2_abpoa_align_sequence_to_subgraph",
+            "simd_sse41_abpoa_align_sequence_to_subgraph",
+        );
+    }
+
+    // AVX512BW → AVX2 fallback
+    if isa_ok("-mavx512bw") {
+        compile_variant("abpoa_align_simd_avx512bw", &["-mavx512bw"]);
+    } else {
+        compile_stub(
+            "abpoa_align_simd_avx512bw",
+            "simd_avx512_abpoa_align_sequence_to_subgraph",
+            "simd_avx2_abpoa_align_sequence_to_subgraph",
+        );
+    }
 }
 
 #[cfg(feature = "bindgen")]
