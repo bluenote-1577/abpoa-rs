@@ -66,7 +66,7 @@ fn main() {
     base_build.flag_if_supported("-Wno-sign-compare");
 
     // On non-x86 targets we must use SIMDe
-    let mut clang_args = vec![
+    let mut clang_args: Vec<String> = vec![
         "-Wno-unused-function".into(),
         "-Wno-misleading-indentation".into(),
         "-Wno-unused-parameter".into(),
@@ -162,9 +162,23 @@ fn main() {
         println!("cargo:rustc-link-lib=z");
     }
 
-    let header = find_header(&include_paths).unwrap_or_else(|| PathBuf::from("abpoa.h"));
+    // By default the crate ships pre-generated bindings in `src/bindings.rs`, so
+    // bindgen is not needed. Rebuild if that vendored file changes.
+    println!("cargo:rerun-if-changed=src/bindings.rs");
 
-    generate_bindings(&header, &include_paths, &clang_args, &target_triple);
+    // Only run bindgen when the `bindgen` feature is enabled.
+    #[cfg(feature = "bindgen")]
+    {
+        let header = find_header(&include_paths).unwrap_or_else(|| PathBuf::from("abpoa.h"));
+        generate_bindings(&header, &include_paths, &clang_args, &target_triple);
+    }
+
+    // These are only consumed by the bindgen path above; silence unused warnings
+    // when the feature is disabled.
+    #[cfg(not(feature = "bindgen"))]
+    {
+        let _ = (&include_paths, &clang_args, &target_triple);
+    }
 }
 
 fn emit_zlib_link_search_paths(zlib_dir: Option<&PathBuf>) {
@@ -197,6 +211,7 @@ fn assert_submodule_present(abpoa_dir: &Path, include_dir: &Path, src_dir: &Path
     }
 }
 
+#[cfg(feature = "bindgen")]
 fn find_header(include_paths: &[PathBuf]) -> Option<PathBuf> {
     include_paths
         .iter()
@@ -266,6 +281,7 @@ fn build_dispatch_variants(
     compile_variant("abpoa_align_simd_avx512bw", &["-mavx512bw"]);
 }
 
+#[cfg(feature = "bindgen")]
 fn generate_bindings(
     header: &Path,
     include_paths: &[PathBuf],

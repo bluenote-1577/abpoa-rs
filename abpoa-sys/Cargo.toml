@@ -7,10 +7,16 @@ build = "build.rs"
 license = "MIT"
 description = "Raw FFI bindings to the abPOA partial order aligner."
 
+[features]
+# Regenerate the FFI bindings at build time instead of using the checked-in
+# `src/bindings.rs`. Useful when bumping the abPOA submodule or building for an
+# unusual target whose ABI differs from the vendored bindings.
+bindgen = ["dep:bindgen"]
+
 [dependencies]
 libc = "0.2"
 
 [build-dependencies]
 cc = "1"
-bindgen = "0.72"
+bindgen = { version = "0.72", optional = true }
 glob = "0.3"

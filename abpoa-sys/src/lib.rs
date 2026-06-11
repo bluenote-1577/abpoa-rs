@@ -9,7 +9,13 @@ pub mod sys {
     #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
     #![allow(clippy::all)]
 
+    // By default use the checked-in bindings so that bindgen is not a build
+    // dependency. With the `bindgen` feature enabled, build.rs regenerates them
+    // into OUT_DIR and we include those instead.
+    #[cfg(feature = "bindgen")]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+    #[cfg(not(feature = "bindgen"))]
+    include!("bindings.rs");
 }
 
 unsafe extern "C" {
