@@ -198,7 +198,11 @@ impl Aligner {
             let seq_len = to_i32(seq.len(), "sequence length exceeds i32")?;
             // Safety: `abs.seq` points to an array sized to at least `n_seq` entries above
             unsafe {
-                sys::abpoa_cpy_str(abs.seq.add(read_idx), seq.as_ptr() as *mut i8, seq_len);
+                sys::abpoa_cpy_str(
+                    abs.seq.add(read_idx),
+                    seq.as_ptr() as *mut libc::c_char,
+                    seq_len,
+                );
             }
 
             if let Some(names) = names {
@@ -208,7 +212,7 @@ impl Aligner {
                 unsafe {
                     sys::abpoa_cpy_str(
                         abs.name.add(read_idx),
-                        name_bytes.as_ptr() as *mut i8,
+                        name_bytes.as_ptr() as *mut libc::c_char,
                         name_len,
                     );
                 }
